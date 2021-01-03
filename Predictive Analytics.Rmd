@@ -1,0 +1,458 @@
+---
+title: "**Predictive Lyric Analytics with NLP**"
+author: "Harini"
+date: "02/01/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## INTRODUCTION
+Lyric analysis is slowly finding its way into data science communities as the possibility of predicting "Hit Songs" approaches reality. There are variety of machine learning (ML) classification algorithms to build models step-by-step that predict the genre of a song.The project work focus on variety of analytic tasks on a case study of musical lyrics by the legendary artist Prince, as well as other artists and authors. The project build models to classify songs into their associated genre and to investigate the possibility of using lyrics to determine commercial success.
+
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+#Automatically install missing packages 
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(dpylr)) install.packages("dpylr", repos = "http://cran.us.r-project.org")
+if(!require(mlr)) install.packages("mlr", repos = "http://cran.us.r-project.org")
+if(!require(circlize)) install.packages("circlize", repos = "http://cran.us.r-project.org")
+if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+if(!require(tidytext)) install.packages("tidytext", repos = "http://cran.us.r-project.org")
+if(!require(jpeg)) install.packages("jpeg", repos = "http://cran.us.r-project.org")
+if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
+if(!require(kknn)) install.packages("kknn", repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("r.part", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(lda)) install.packages("lda", repos = "http://cran.us.r-project.org")
+if(!require(ksvm)) install.packages("ksvm", repos = "http://cran.us.r-project.org")
+if(!require(PART)) install.packages("PART", repos = "http://cran.us.r-project.org")
+if(!require(nnet)) install.packages("nnet", repos = "http://cran.us.r-project.org")
+if(!require(parallelMap)) install.packages("parallelMap", repos = "http://cran.us.r-project.org")
+
+library(tidyverse) #tidyr, #dplyr, #magrittr, #ggplot2
+library(dplyr)
+library(tidytext) #unnesting text into single words
+library(mlr) #machine learning framework for R
+library(kableExtra) #create attractive tables
+library(circlize) #cool circle plots
+library(jpeg) #read in jpg files for the circle plots
+library(xgboost)
+library(kknn)
+library(rpart)
+library(randomForest)
+library(lda)
+library(nnet)
+library(parallelMap)
+#define some colors to use throughout
+my_colors <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#D55E00", "#D65E00")
+
+#customize the text tables for consistency using HTML formatting
+my_kable_styling <- function(dat, caption) {
+  kable(dat, "html", escape = FALSE, caption = caption) %>%
+  kable_styling(bootstrap_options = c( "condensed", "bordered"),
+                full_width = FALSE)
+}
+
+```
+## DATA INGESTION
+      The train and test dataset has five authors/artist and their books/songs. It has michael jackson,pastyline,prince,amy grant,,,,chris tomuin,eminem,jay Z,jonny cash,ml dummies,mlearning r. The project explains and provides a musical use case for a form of supervised learning, specifically classification, that is based on the lyrics of a variety of artists (and a couple of book authors) 
+
+Then use unnest() from tidytext to create the tidy version with one word per record.
+## DATA PREPROCESSING
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+#Downloading the file and saving it to dl
+dl <- tempfile()
+download.file("https://s3.amazonaws.com/assets.datacamp.com/blog_assets/Lyric+Analysis%3A+Predictive+Analytics+using+Machine+Learning+with+R/five_sources_data_balanced.csv", dl)
+#Read the csv file 
+five_sources_data <- read.csv(dl)
+five_sources_tidy <- five_sources_data %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+
+dl1 <- tempfile()
+download.file("https://s3.amazonaws.com/assets.datacamp.com/blog_assets/Lyric+Analysis%3A+Predictive+Analytics+using+Machine+Learning+with+R/five_sources_data_test.csv", dl1)
+#Read the csv file 
+five_sources_data_test  <- read.csv(dl1)
+five_sources_test_tidy <- five_sources_data_test %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+#very small file that has a couple of words that help to identify certain genres
+dl2 <- tempfile()
+download.file("https://s3.amazonaws.com/assets.datacamp.com/blog_assets/Lyric+Analysis%3A+Predictive+Analytics+using+Machine+Learning+with+R/explicit_words.csv", dl2)
+#Read the csv file 
+explicit_words  <- read.csv(dl2)
+```
+Since the dataset has songs and book pages, I'll refer to them each as a document. The features that are created based on documents and their associated metadata.There are artists and authors, I will refer to them as the source of each document.
+```{r }
+five_sources_data %>%
+  group_by(genre, source) %>%
+  summarise(doc_count = n()) %>%
+  my_kable_styling("Training Dataset")
+five_sources_data_test %>%
+  group_by(genre, source) %>%
+  summarise(doc_count = n()) %>%
+  my_kable_styling("Test Dataset")
+
+```
+To see the genre, source, and the number of documents, the following chord diagram is a better way to view these relationships. There is a one-to-one relationship between source and genre because the artists are classified ; however, cross-over artists are very common. 
+```{r }
+#get SONG count per genre/source. Order determines top or bottom.
+genre_chart <-  five_sources_data %>%
+  count(genre, source)  
+
+circos.clear() #very important! Reset the circular layout parameters
+#assign chord colors
+grid.col = c("christian" = my_colors[1], "pop-rock" = my_colors[2],
+             "hip-hop-rap" = my_colors[3], "data-science" = my_colors[4],
+             "country" = my_colors[5],
+             "amy-grant" = "grey", "eminem" = "grey",
+             "johnny-cash" = "grey", "machine_learning" = "grey",
+             "prince" = "grey")
+# set the global parameters for the circular layout. Specifically the gap size
+circos.par(gap.after = c(rep(5, length(unique(genre_chart[[1]])) - 1), 15,
+                         rep(5, length(unique(genre_chart[[2]])) - 1), 15))
+
+chordDiagram(genre_chart, grid.col = grid.col, transparency = .2)
+title("Relationship Between Genre and Source")
+```
+This diagram would look like if there was not a one-to-one relationship.If prediction is made on genre based only on lyrics, would have gone wrong.
+
+## Predict Genre
+Think about the song and what makes one different from another, lyrically. A common theme in all music is repetition. Do some genres use repetition more than others? What about word length? Do some use larger or smaller words more often? What other factors drive to describe lyrics?
+Note that all of the variables listed above are quantitative features, (counts, lengths, etc.) based on words per song. But what about individual words specific to genres? 
+
+## Feature Engineering
+Get the most common (frequently used) words per genre.  Start by getting the total number of words per genre. Then group by words per genre and get a count of how often each word is used. Now select the top n most frequent words defined by the number_of_words variable.  I came up with a total of 5500 as the most optimal number of words. Play around with this value and see how it impacts outcome. Many words are very common to more than one genre (such as time, life, etc.) and I have removed these words with the multi_genre variable below. This makes for a cleaner list of distinct words that create a better distinction between the sources.
+```{r }
+#play with this number until getting the best results for the model.
+number_of_words = 5500
+
+top_words_per_genre <- five_sources_tidy %>%
+  group_by(genre) %>%
+  mutate(genre_word_count = n()) %>%
+  group_by(genre, word) %>%
+  #note that the percentage is also collected, when really you
+  #could have just used the count, but it's good practice to use a %
+  mutate(word_count = n(),
+         word_pct = word_count / genre_word_count * 100) %>%
+  select(word, genre, genre_word_count, word_count, word_pct) %>%
+  distinct() %>%
+  ungroup() %>%
+  arrange(desc(word_pct)) %>%
+  top_n(number_of_words) %>%
+  select(genre, word, word_pct)
+
+#remove words that are in more than one genre
+top_words <- top_words_per_genre %>%
+  ungroup() %>%
+  group_by(word) %>%
+  mutate(multi_genre = n()) %>%
+  filter(multi_genre < 2) %>%
+  select(genre, top_word = word)
+
+#create lists of the top words per genre
+book_words <- lapply(top_words[top_words$genre == "data-science",], as.character)
+country_words <- lapply(top_words[top_words$genre == "country",], as.character)
+hip_hop_words <- lapply(top_words[top_words$genre == "hip-hop-rap",], as.character)
+pop_rock_words <- lapply(top_words[top_words$genre == "pop-rock",], as.character)
+christian_words <- lapply(top_words[top_words$genre == "christian",], as.character)
+
+
+```
+Think about each feature below and how it could vary according to the genre.country_word_count is merely a count of the top country words that appear in each song. Notice that I have assigned more weight to explicit and book words (see the 10 and 20 used in the sum() function). I did this because they are very distinctive and help to classify documents. Again, this was a trial and error process!
+```{r }
+features_func_genre <- function(data) {
+  features <- data %>%
+  group_by(document) %>%
+  mutate(word_frequency = n(),
+         lexical_diversity = n_distinct(word),
+         lexical_density = lexical_diversity/word_frequency,
+         repetition = word_frequency/lexical_diversity,
+         document_avg_word_length = mean(nchar(word)),
+         title_word_count = lengths(gregexpr("[A-z]\\W+",
+                                             document)) + 1L,
+         title_length = nchar(document),
+         large_word_count =
+           sum(ifelse((nchar(word) > 7), 1, 0)),
+         small_word_count =
+           sum(ifelse((nchar(word) < 3), 1, 0)),
+         #assign more weight to these words using "10" below
+         explicit_word_count =
+          sum(ifelse(word %in% explicit_words$explicit_word,10,0)),
+         #assign more weight to these words using "20" below
+         book_word_count =
+           sum(ifelse(word %in% book_words$top_word,20,0)),
+         christian_word_count =
+           sum(ifelse(word %in% christian_words$top_word,1,0)),
+         country_word_count =
+           sum(ifelse(word %in% country_words$top_word,1,0)),
+         hip_hop_word_count =
+           sum(ifelse(word %in% hip_hop_words$top_word,1,0)),
+         pop_rock_word_count =
+           sum(ifelse(word %in% pop_rock_words$top_word,1,0))
+         ) %>%
+  select(-word) %>%
+  distinct() %>% #to obtain one record per document
+  ungroup()
+
+features$genre <- as.factor(features$genre)
+return(features)
+}
+```
+Now calling features() function for training and test datasets.
+```{r }
+train <- features_func_genre(five_sources_tidy)
+test  <- features_func_genre(five_sources_test_tidy)
+```
+## Machine Learning Process
+mlr (Machine Learning for R), is a framework that includes all of the frequently used machine learning algorithms. The ML process is simple: create a task, make a learner, train it, test it. Here are the steps :
+
+Create the classifier task: declare the datasets and outcome (target) variable
+Normalize the data: pre-processing (scale and center)
+Create a list of learners: choose the learning algorithm(s)
+Choose a resampling method: choose a method to assess performance using a validation set during training
+Select the measures: create a list of measures such as accuracy or error rate
+Perform training/benchmarking: compare the results of the models based on the tasks and learners
+Tune the best model: choose the best performing learner and tune the hyperparameters
+Test on new data: run your model against data it has never seen before.
+
+## The Classifier Task
+A task is merely the dataset on which a learner learns. Since this is a classification problem, create a classification task by using makeClassifTask(). Specifying classification outcome variable, genre, by passing it as the target argument. There is also a dataset that uses only the basic quantitative features consisting of document summaries and counts. This task, task_train_subset is created without the genre word count features (i.e., country_word_count, pop_rock_word_count, etc.) to illustrate the importance of these contextual predictors in the final model. So using the dataset train[3:13] removes these variables. 
+```{r }
+#create classification tasks to use for modeling
+
+#this dataset does not include genre specific words
+task_train_subset <- makeClassifTask(id = "Five Sources Feature Subset",
+                                     data = train[3:13], target = "genre")
+
+#create the training dataset task
+task_train <- makeClassifTask(id = "Five Sources",
+                              data = train[-c(1:2)], target = "genre")
+
+#create the testing dataset task
+task_test <- makeClassifTask(id = "New Data Test",
+                             data = test[-c(1:2)], target = "genre")
+```
+## Normalize Data
+It is simply a method of scaling  data such that all the values are normalized between values of zero and one (or whatever values you pass). If some variables are much larger in value and are on a different scale than the others, they will throw off model by giving more weight to those variables. Normalization takes care of this problem. mlr provides a simple function called normalizeFeatures() for this step.
+```{r }
+#scale and center the training and test datasets
+task_train_subset <- normalizeFeatures(task_train_subset, method = "standardize",
+  cols = NULL, range = c(0, 1), on.constant = "quiet")
+
+task_train <- normalizeFeatures(task_train, method = "standardize",
+  cols = NULL, range = c(0, 1), on.constant = "quiet")
+
+task_test <- normalizeFeatures(task_test, method = "standardize",
+  cols = NULL, range = c(0, 1), on.constant = "quiet")
+```
+## Create a List of Learners
+A learner in mlr is generated by calling makeLearner().We can obtain a list of possible classification algorithms by calling listLearners("classif")[c("class","package")].This shows the algorithms you have to choose from as well as their dependent packages (which may need to install separately).Currently there are over 80 classification learners in mlr.
+```{r }
+#create a list of learners using algorithms you'd like to try out
+lrns = list(
+makeLearner("classif.randomForest", id = "Random Forest", predict.type = "prob"),
+makeLearner("classif.rpart", id = "RPART", predict.type = "prob"),
+makeLearner("classif.xgboost", id = "xgBoost", predict.type = "prob"),
+makeLearner("classif.kknn", id = "KNN"),
+makeLearner("classif.lda", id = "LDA"),
+makeLearner("classif.ksvm", id = "SVM"),
+makeLearner("classif.naiveBayes", id = "Naive Bayes"),
+makeLearner("classif.nnet", id = "Neural Net", predict.type = "prob")
+)
+```
+## Resampling
+ It involves repeatedly drawing samples from a training set and refitting a model on each sample. This may allow you to obtain information not available from fitting the model only once with the original training data.k-fold cross validation indicated by the "CV" in the call to makeResampleDesc() which returns a resample description object (rdesc). This approach randomly divides the dataset into k groups (folds) of equal size. The first fold is used as a validation set, and the remaining folds are used for training. This is repeated k times on each of the folds. The error rate is captured for each iteration and averaged at the end.
+```{r }
+# n-fold cross-validation use stratify for categorical outcome variables
+rdesc = makeResampleDesc("CV", iters = 10, stratify = TRUE)
+```
+## Performance Measures
+The typical objective of classification is to obtain a high prediction accuracy and minimize the number of errors. Accuracy is the number of correct predictions from all predictions made. Confusion matrix to see how things were classified (predicted vs. actual). 
+```{r }
+#let the benchmark function know which measures to obtain
+#accuracy, time to train
+meas = list(acc, timetrain)
+```
+## Train Models / Benchmark
+Benchmark experiment in which different algorithms (learning methods) are applied to dataset. It will compare algorithms according to the specific measures of interest (i.e., accuracy).benchmark() to train your model and generate a BenchmarkResult object from which we can access the models and results. 
+Take the dataset which does not include the genre-specific word counts. Pass to benchmark list of learners, the subset task, the resampling strategy (rdesc), and the list of measures we would like to see.
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+#it would be best to loop through this multiple times to get better results
+#so consider adding a for loop here!
+set.seed(123)
+bmr <- benchmark(lrns, task_train_subset, rdesc, meas, show.info = FALSE)
+rf_perf <- round(bmr$results$`Five Sources Feature Subset`$`Random Forest`$aggr[[1]],2) * 100
+class(bmr)
+```
+This is the average accuracy across all samples for the validation datasets used in cross-validation when it is trained the model.This is not the same as the test dataset.There is a series of validation datasets that are held out during cross-validation, and a test dataset that you'll use after you decide on an algorithm and tune the model.Random Forest performs the best at r rf_perf percent (and took the longest to train). Keeping that value in mind, rerun this experiment on the full feature set. I recommend using the getBMR* getter functions.plotBMRSummary() getter function and do this by creating a list of tasks to pass to benchmark().
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+#always set.seed to make sure you can replicate your results
+set.seed(123)
+task_list <- list(task_train, task_train_subset)
+bmr_multi_task <- benchmark(lrns, task_list, rdesc, meas, show.info = FALSE)
+plotBMRSummary(bmr_multi_task)
+
+set.seed(123)
+bmr = benchmark(lrns, task_train, rdesc, meas, show.info = FALSE)
+plotBMRSummary(bmr)
+
+plotBMRBoxplots(bmr, measure = acc, style = "violin",
+                pretty.names = FALSE) +
+  aes(color = learner.id) +
+  ylab("Accuracy") +
+  theme(strip.text.x = element_text(size = 8))
+```
+These boxplots show you the results for each method across several iterations performed by benchmarking.
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+performances <- getBMRAggrPerformances(bmr, as.df = TRUE) %>%
+  select(ModelType = learner.id, Accuracy = acc.test.mean) %>%
+  mutate(Accuracy = round(Accuracy, 4)) %>%
+  arrange(desc(Accuracy))
+
+#just for use in markdown narrative
+first_three <- round(performances$Accuracy[1:3],2) * 100
+
+performances %>%
+  my_kable_styling("Validation Set Model Comparison")
+```
+```{r }
+predictions <- getBMRPredictions(bmr)
+
+calculateConfusionMatrix(predictions$`Five Sources`$`Random Forest`)$result  %>%
+  my_kable_styling("Random Forest Confusion Matrix: Rows are True, Columns are Predictions")
+```
+As you may expect, with only one misclassification, it is relatively easy to distinguish data science documents from song lyrics using the textual metadata features  engineered. In addition, hip-hop-rap is very distinctive from other musical genres with only eight misclassifications. However, although performance is quite impressive, there is less distinction between country, Christian and pop-rock musical lyrics.
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+train$id <- seq_len(nrow(train))
+df <- predictions$`Five Sources`$`Random Forest`$data
+
+chart <- train %>%
+  inner_join(predictions$`Five Sources`$`Random Forest`$data) %>%
+  group_by(source, response) %>%
+  summarise(n())
+
+circos.clear() #very important! Reset the circular layout parameters
+#assign chord colors
+grid.col = c("christian" = my_colors[1], "pop-rock" = my_colors[2],
+             "hip-hop-rap" = my_colors[3], "data-science" = my_colors[4],
+             "country" = my_colors[5],
+             "amy-grant" = my_colors[1], "prince" = my_colors[2],
+             "eminem" = my_colors[3], "machine_learning" = my_colors[4],
+             "johnny-cash" = my_colors[5])
+
+# set the global parameters for the circular layout. Specifically the gap size
+circos.par(gap.after = c(rep(5, length(unique(chart[[1]])) - 1), 15,
+                         rep(5, length(unique(chart[[2]])) - 1), 15))
+
+chordDiagram(chart, grid.col = grid.col, transparency = .2)
+title("Predicted Relationship Between Genre and Source - Train")
+```
+Now you can see how well you did on the training data. Once again the results are impressive. The smaller lines represent the misclassifications.
+First model data with simple models and analyze data for errors. These errors signify data points that are difficult to fit by a simple model. Then for later models, particularly focus on those hard to fit data to get them right. In the end, combine all the predictors by giving some weights to each predictor.
+## Tune the model - xgBoost
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+xgb_params <- makeParamSet(
+  makeDiscreteParam("booster",values = c("gbtree")),
+  makeIntegerParam("nrounds",lower=10,upper=20),
+  makeIntegerParam("max_depth",lower = 4,upper = 6),
+  makeNumericParam("min_child_weight",lower = 1L,upper = 10L),
+  makeNumericParam("subsample",lower = 0.5,upper = 1),
+  makeNumericParam("colsample_bytree",lower = 0.5,upper = 1),
+  makeNumericParam("eta",lower = .01, upper = .2)
+)
+control <- makeTuneControlRandom(maxit = 150L)
+
+xglearn <- makeLearner("classif.xgboost", predict.type = "prob", id="tuned xgboost")
+
+library(parallelMap)
+parallelStartSocket(2)
+set.seed(123)
+tuned_params <- tuneParams(
+  learner = xglearn,
+  task = task_train,
+  resampling = rdesc,
+  par.set = xgb_params,
+  control = control,
+  measures = acc,
+  show.info = TRUE
+)
+
+xgb_tuned_learner <- setHyperPars(
+  learner = xglearn,
+  par.vals = tuned_params$x
+)
+
+tuned_params$x
+```
+Examine the optimized parameters by looking at the output of tuneParams(). Now you want to create a new model using the tuned hyperparameters and then re-train on the training dataset.
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+lrns = list(makeLearner("classif.nnet", predict.type = "prob"),
+            makeLearner("classif.randomForest", predict.type = "prob"),
+            makeLearner("classif.xgboost", id="untunedxgboost" ,predict.type = "prob"),
+            xgb_tuned_learner)
+
+set.seed(123)
+bmr = benchmark(lrns, task_train, rdesc, meas)
+plotBMRBoxplots(bmr, measure = acc, style = "violin", pretty.names = FALSE) +
+  aes(color = learner.id) +
+  ylab("Accuracy") +
+  theme(strip.text.x = element_text(size = 8))
+performances <- getBMRAggrPerformances(bmr, as.df = TRUE) %>%
+  select(ModelType = learner.id, Accuracy = acc.test.mean) %>%
+  mutate(Accuracy = round(Accuracy, 4)) %>%
+  arrange(desc(Accuracy))
+
+# #used in markdown
+# first_three <- round(performances$Accuracy[1:3],2) * 100
+
+performances %>%
+  my_kable_styling("Validation Set Model Comparison")
+```
+The tuned xgBoost model is only slightly higher than the untuned one and is still not as accurate as random forest. 
+## The Real Test: New Data
+Now that you have your tuned model and benchmarks, you can call predict() for your top three models on the test dataset that has never been seen before. This includes five completely different sources as shown previously. Take a look at its performance and actual classifications.
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+set.seed(12)
+nnet_model = train("classif.nnet", task_train)
+result_nnet <- predict(nnet_model, task_test)
+performance(result_nnet, measures = acc)
+set.seed(12)
+xgb_model = train(xgb_tuned_learner, task_train)
+result_xgb <- predict(xgb_model, task_test)
+test_perf <- performance(result_xgb, measures = acc)
+test_perf
+```
+ Even though random forest had a higher accuracy on the training data than the tuned xgBoost, it was slightly less accurate on the test dataset. The test accuracy for neural net is much lower than on training as well. Neural nets can be very flexible models and as a result, can overfit the training set.
+
+At an accuracy rate of r round(test_perf,2)*100% for tuned xgBoost, there was still a dramatic decrease in performance on the test data compared to training and tuning only made a slight improvement (using this minimal configuration!). This drop in accuracy between train and test is widespread and is precisely why you should test your model on new data.
+```{r warning=FALSE, message = FALSE, echo=FALSE}
+calculateConfusionMatrix(result_xgb)$result %>%
+  my_kable_styling("TEST: xgBoost Confusion Matrix: Rows are True, Columns are Predictions")
+test$id <- seq_len(nrow(test))
+
+chart <- test %>%
+  inner_join(result_xgb$data) %>%
+  group_by(source, response) %>%
+  summarise(n())
+
+circos.clear() #very important! Reset the circular layout parameters
+#assign chord colors
+grid.col = c("christian" = my_colors[1], "pop-rock" = my_colors[2],
+             "hip-hop-rap" = my_colors[3], "data-science" = my_colors[4],
+             "country" = my_colors[5],
+             "chris-tomlin" = my_colors[1], "michael-jackson" = my_colors[2],
+             "jay-z" = my_colors[3], "machine_learning_r" = my_colors[4],
+             "patsy-cline" = my_colors[5])
+
+# set the global parameters for the circular layout. Specifically the gap size
+circos.par(gap.after = c(rep(5, length(unique(chart[[1]])) - 1), 15,
+                         rep(5, length(unique(chart[[2]])) - 1), 15))
+
+chordDiagram(chart, grid.col = grid.col, transparency = .2)
+title("Predicted Relationship Between Genre and Source - Test")
+```
+New chord diagram actually gives a more realistic version of the lyrical classification than shown in the original dataset! There actually isn't a one-to-one relationship between artist, and genre in real life and that flexibility is built into model.
+## Conclusion
+ We have built a model to predict the genre of a song based entirely on lyrics. We used supervised machine learning classification algorithms and trained models on a set of five different artists and five different genres. By using the mlr framework, created tasks, learners and resampling strategies to train and then tune a model(s). Then  ran the model against an unseen test dataset of different artists. we were able to identify which algorithms work better with the default settings, and eventually, predict the genre of new songs that our model has never seen.
